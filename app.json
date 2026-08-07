@@ -3,7 +3,7 @@
     "name": "HelpPetsSlots",
     "slug": "help-pets-slots",
     "version": "1.0.0",
-    "owner": "zig1",
+    "owner": "zig2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "splash": {
@@ -17,11 +17,6 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.appcollection.xhelppetslots_13522"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "5fa693f4-d2d9-4b58-9cd1-79eb3747fea8"
-      }
     }
   }
 }
