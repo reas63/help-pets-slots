@@ -17,6 +17,11 @@
         "backgroundColor": "#0f172a"
       },
       "package": "com.appcollection.xhelppetslots_13522"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "980df7e9-71d8-4e31-8616-4a40886a26a4"
+      }
     }
   }
 }
