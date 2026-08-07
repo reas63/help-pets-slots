@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -9,9 +9,11 @@ import {
   StatusBar, 
   Modal, 
   Linking,
-  ScrollView
+  ScrollView,
+  Animated
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
 
 const SYMBOLS = ['🐶', '🐱', '🦴', '🐾', '🎰', '💎', '🐕', '🐈'];
 const PAYPAL_URL = 'https://www.paypal.com/donate?business=reas63@hotmail.com&amount=1.00&currency_code=BRL';
@@ -35,6 +37,39 @@ export default function App() {
   const [modalVisible, setModalVisible] = useState(false);
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [winLogs, setWinLogs] = useState([]);
+
+  // Animação 3D (Rotação e Escala)
+  const spinAnim = useRef(new Animated.Value(0)).current;
+
+  // Sons
+  const [sound, setSound] = useState();
+
+  async function playSound(type) {
+    try {
+      let soundUri = '';
+      if (type === 'spin') {
+        soundUri = 'https://actions.google.com/sounds/v1/foley/wheels_spinning.ogg';
+      } else if (type === 'win') {
+        soundUri = 'https://actions.google.com/sounds/v1/cartoon/bell_ding.ogg';
+      } else if (type === 'jackpot') {
+        soundUri = 'https://actions.google.com/sounds/v1/human_voices/cheering_and_applause.ogg';
+      }
+
+      if (soundUri) {
+        const { sound: newSound } = await Audio.Sound.createAsync(
+          { uri: soundUri },
+          { shouldPlay: true, volume: 0.8 }
+        );
+        setSound(newSound);
+      }
+    } catch (error) {
+      console.log('Erro ao tocar som:', error);
+    }
+  }
+
+  useEffect(() => {
+    return sound ? () => { sound.unloadAsync(); } : undefined;
+  }, [sound]);
 
   useEffect(() => {
     loadSavedData();
@@ -107,7 +142,7 @@ export default function App() {
       return { linePrize, isJackpot };
     };
 
-    // 1. Horizontais
+    // Horizontais
     for (let r = 0; r < GRID_SIZE; r++) {
       const res = evaluateLine(currentGrid[r]);
       if (res.linePrize > 0) linesWon++;
@@ -115,7 +150,7 @@ export default function App() {
       totalWin += res.linePrize;
     }
 
-    // 2. Verticais
+    // Verticais
     for (let c = 0; c < GRID_SIZE; c++) {
       const col = [currentGrid[0][c], currentGrid[1][c], currentGrid[2][c], currentGrid[3][c], currentGrid[4][c]];
       const res = evaluateLine(col);
@@ -124,7 +159,7 @@ export default function App() {
       totalWin += res.linePrize;
     }
 
-    // 3. Diagonais
+    // Diagonais
     const diag1 = [currentGrid[0][0], currentGrid[1][1], currentGrid[2][2], currentGrid[3][3], currentGrid[4][4]];
     const resD1 = evaluateLine(diag1);
     if (resD1.linePrize > 0) linesWon++;
@@ -138,10 +173,12 @@ export default function App() {
     totalWin += resD2.linePrize;
 
     if (jackpotCount > 0) {
+      playSound('jackpot');
       setCoins(prev => prev + totalWin);
       addWinLog('SUPER JACKPOT 👑', totalWin, linesWon);
       Alert.alert('SUPER JACKPOT! 👑', `Parabéns! Você ganhou ${totalWin} moedas!`);
     } else if (totalWin > 0) {
+      playSound('win');
       setCoins(prev => prev + totalWin);
       addWinLog('Vitória 🐾', totalWin, linesWon);
       Alert.alert('Combinação Campeã! 🐾', `Você acertou ${linesWon} linha(s) e ganhou ${totalWin} moedas!`);
@@ -163,6 +200,18 @@ export default function App() {
 
     setSpinning(true);
     setCoins(prev => prev - bet);
+    playSound('spin');
+
+    // Inicia Animação de Giro 3D
+    spinAnim.setValue(0);
+    Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+      { iterations: 6 }
+    ).start();
 
     let counter = 0;
     const interval = setInterval(() => {
@@ -194,12 +243,18 @@ export default function App() {
     }
   };
 
+  // Interpolação de Rotação 3D
+  const spin3D = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>🐶 Help Pets Slots 🎰</Text>
-        <Text style={styles.subtitle}>Grade 5x5: 12 Linhas de Vitória!</Text>
+        <Text style={styles.subtitle}>Grade 5x5 com Sons e Animação 3D!</Text>
 
         <View style={styles.scoreRow}>
           <View style={styles.scoreContainer}>
@@ -213,14 +268,25 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Grade 5x5 */}
+        {/* Grade 5x5 com efeito 3D */}
         <View style={styles.gridContainer}>
           {grid.map((row, rowIndex) => (
             <View key={rowIndex} style={styles.row}>
               {row.map((symbol, colIndex) => (
-                <View key={colIndex} style={styles.cell}>
+                <Animated.View 
+                  key={colIndex} 
+                  style={[
+                    styles.cell, 
+                    spinning && {
+                      transform: [
+                        { rotateX: spin3D },
+                        { perspective: 1000 }
+                      ]
+                    }
+                  ]}
+                >
                   <Text style={styles.cellText}>{symbol}</Text>
-                </View>
+                </Animated.View>
               ))}
             </View>
           ))}
@@ -248,7 +314,7 @@ export default function App() {
           disabled={spinning}
         >
           <Text style={styles.spinButtonText}>
-            {spinning ? 'Girando 5x5...' : `🎰 GIRAR (${bet} Moedas)`}
+            {spinning ? 'Girando 3D...' : `🎰 GIRAR (${bet} Moedas)`}
           </Text>
         </TouchableOpacity>
 
@@ -317,9 +383,29 @@ const styles = StyleSheet.create({
   historyButton: { backgroundColor: '#334155', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20 },
   historyButtonText: { color: '#38bdf8', fontWeight: 'bold', fontSize: 14 },
 
-  gridContainer: { backgroundColor: '#0284c7', padding: 6, borderRadius: 16, marginBottom: 20 },
+  gridContainer: { 
+    backgroundColor: '#0284c7', 
+    padding: 6, 
+    borderRadius: 16, 
+    marginBottom: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8
+  },
   row: { flexDirection: 'row' },
-  cell: { width: 58, height: 58, backgroundColor: '#1e293b', margin: 3, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  cell: { 
+    width: 58, 
+    height: 58, 
+    backgroundColor: '#1e293b', 
+    margin: 3, 
+    borderRadius: 10, 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#0284c7'
+  },
   cellText: { fontSize: 28 },
 
   betContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
