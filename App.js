@@ -1,243 +1,290 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   StyleSheet, Text, View, SafeAreaView, TouchableOpacity, Alert, 
-  StatusBar, Modal, Linking, ScrollView, Animated
+  StatusBar, Modal, ScrollView, Animated
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Speech from 'expo-speech';
+import { WebView } from 'react-native-webview';
 
-const SYMBOLS = ['🐶', '🐱', '🦴', '🐾', '🎰', '💎', '🐕', '🐈'];
-const PAYPAL_URL = 'https://www.paypal.com/donate?business=reas63@hotmail.com&amount=1.00&currency_code=BRL';
+const SKINS = {
+  classic: { name: 'Pets Clássicos', price: 0, symbols: ['🐶', '🐱', '🦴', '🐾', '🎰', '💎', '🐕', '🐈'] },
+  neon: { name: 'Pets Cyber Neon', price: 300, symbols: ['🤖', '⚡', '🛸', '👾', '💎', '🔮', '🚀', '🌟'] },
+  magic: { name: 'Pets Mágicos', price: 600, symbols: ['🦄', '🐉', '✨', '👑', '🔮', '🌙', '⭐', '🎆'] }
+};
+
 const GRID_SIZE = 5;
 
+// Código HTML/JS que roda dentro da WebView invisível para tocar os sons via Web Audio API
+const audioEngineHTML = `
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <script>
+        let audioCtx = null;
+
+        function initAudio() {
+          if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+          }
+        }
+
+        function playSpinSound() {
+          initAudio();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.15);
+          gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+          gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.15);
+        }
+
+        function playWinSound() {
+          initAudio();
+          const now = audioCtx.currentTime;
+          const notes = [523.25, 659.25, 783.99, 1046.50]; // Notas Do, Mi, Sol, Do (Acorde de vitória)
+          notes.forEach((freq, i) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + (i * 0.08));
+            gain.gain.setValueAtTime(0.2, now + (i * 0.08));
+            gain.gain.exponentialRampToValueAtTime(0.001, now + (i * 0.08) + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now + (i * 0.08));
+            osc.stop(now + (i * 0.08) + 0.3);
+          });
+        }
+
+        document.addEventListener('message', function(event) {
+          const type = event.data;
+          if (type === 'spin') playSpinSound();
+          if (type === 'win') playWinSound();
+        });
+      </script>
+    </head>
+    <body style="background:transparent;"></body>
+  </html>
+`;
+
 export default function App() {
-  const [grid, setGrid] = useState([
-    ['🐶', '🐱', '🦴', '🐾', '💎'], ['🐾', '🐶', '💎', '🦴', '🐱'],
-    ['🦴', '💎', '🐶', '🐾', '🎰'], ['🐱', '🐾', '🎰', '🐶', '💎'],
-    ['💎', '🦴', '🐱', '🎰', '🐶'],
-  ]);
-  const [coins, setCoins] = useState(100);
+  const [coins, setCoins] = useState(200);
   const [bet, setBet] = useState(10);
   const [spinning, setSpinning] = useState(false);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [historyModalVisible, setHistoryModalVisible] = useState(false);
-  const [winLogs, setWinLogs] = useState([]);
+  const [activeSkin, setActiveSkin] = useState('classic');
+  const [ownedSkins, setOwnedSkins] = useState(['classic']);
+  const [grid, setGrid] = useState(Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill('🐶')));
+  
+  const [shopModal, setShopModal] = useState(false);
+  const [leaderboardModal, setLeaderboardModal] = useState(false);
+  const [highScore, setHighScore] = useState(200);
 
   const spinAnim = useRef(new Animated.Value(0)).current;
+  const webViewRef = useRef(null);
 
-  // Sistema de Efeitos Sonoros do Jogo (Garantido sem travar o App)
-  const playSoundEffect = (type) => {
+  useEffect(() => { loadData(); }, []);
+
+  useEffect(() => {
+    if (coins > highScore) {
+      setHighScore(coins);
+      AsyncStorage.setItem('@highscore', JSON.stringify(coins));
+    }
+    AsyncStorage.setItem('@coins', JSON.stringify(coins));
+  }, [coins]);
+
+  const loadData = async () => {
     try {
-      if (type === 'spin') {
-        Speech.speak('GIRANDO!', { language: 'pt-BR', pitch: 1.5, rate: 1.2 });
-      } else if (type === 'win') {
-        Speech.speak('PARABÉNS! VOCÊ GANHOU!', { language: 'pt-BR', pitch: 1.2, rate: 1.0 });
-      } else if (type === 'jackpot') {
-        Speech.speak('JACKPOT! SENSACIONAL!', { language: 'pt-BR', pitch: 1.4, rate: 1.0 });
-      }
+      const savedCoins = await AsyncStorage.getItem('@coins');
+      const savedSkins = await AsyncStorage.getItem('@owned_skins');
+      const savedHighScore = await AsyncStorage.getItem('@highscore');
+      if (savedCoins) setCoins(JSON.parse(savedCoins));
+      if (savedSkins) setOwnedSkins(JSON.parse(savedSkins));
+      if (savedHighScore) setHighScore(JSON.parse(savedHighScore));
     } catch (e) {}
   };
 
-  useEffect(() => { loadSavedData(); }, []);
-  useEffect(() => { saveCoins(coins); }, [coins]);
-
-  const loadSavedData = async () => {
-    try {
-      const savedCoins = await AsyncStorage.getItem('@help_pets_coins');
-      const savedLogs = await AsyncStorage.getItem('@help_pets_win_logs');
-      if (savedCoins !== null) setCoins(JSON.parse(savedCoins));
-      if (savedLogs !== null) setWinLogs(JSON.parse(savedLogs));
-    } catch (e) {}
-  };
-
-  const saveCoins = async (value) => {
-    try { await AsyncStorage.setItem('@help_pets_coins', JSON.stringify(value)); } catch (e) {}
-  };
-
-  const addWinLog = async (type, prize) => {
-    const timeStr = new Date().toLocaleTimeString();
-    const newEntry = { id: Date.now().toString(), type, prize, time: timeStr };
-    const updatedLogs = [newEntry, ...winLogs].slice(0, 30);
-    setWinLogs(updatedLogs);
-    try { await AsyncStorage.setItem('@help_pets_win_logs', JSON.stringify(updatedLogs)); } catch (e) {}
-  };
-
-  const checkWins = (currentGrid) => {
-    let totalWin = 0;
-    let jackpot = false;
-
-    const evaluateLine = (line) => {
-      const counts = {};
-      line.forEach(s => counts[s] = (counts[s] || 0) + 1);
-      for (const s in counts) {
-        if (counts[s] === 5) { jackpot = true; return 500; }
-        else if (counts[s] >= 3) return 30;
-      }
-      return 0;
-    };
-    
-    for (let i = 0; i < 5; i++) totalWin += evaluateLine(currentGrid[i]);
-
-    if (jackpot) {
-      playSoundEffect('jackpot');
-      setCoins(prev => prev + totalWin);
-      addWinLog('SUPER JACKPOT 👑', totalWin);
-      Alert.alert('SUPER JACKPOT! 👑', `Parabéns! Você ganhou ${totalWin} moedas!`);
-    } else if (totalWin > 0) {
-      playSoundEffect('win');
-      setCoins(prev => prev + totalWin);
-      addWinLog('Vitória 🐾', totalWin);
-      Alert.alert('Combinação Campeã! 🐾', `Você acertou e ganhou ${totalWin} moedas!`);
+  // Envia comando para a WebView tocar o som
+  const sendSoundCommand = (soundType) => {
+    if (webViewRef.current) {
+      webViewRef.current.postMessage(soundType);
     }
   };
 
   const spin = () => {
     if (coins < bet) {
-      Alert.alert(
-        'Saldo Insuficiente 🐾', 
-        'Suas moedas acabaram! Apoie o projeto via PayPal para recarregar.',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Apoiar R$ 1,00', onPress: () => setModalVisible(true) }
-        ]
-      );
+      Alert.alert('Saldo Insuficiente 🐾', 'Acumule mais moedas para continuar jogando!');
       return;
     }
 
     setSpinning(true);
     setCoins(prev => prev - bet);
-    playSoundEffect('spin');
+    sendSoundCommand('spin');
 
-    // Animação 3D dos Slots
     spinAnim.setValue(0);
-    Animated.timing(spinAnim, {
-      toValue: 1,
-      duration: 1000,
-      useNativeDriver: true
-    }).start();
+    Animated.timing(spinAnim, { toValue: 1, duration: 800, useNativeDriver: true }).start();
 
+    const symbols = SKINS[activeSkin].symbols;
     let counter = 0;
     const interval = setInterval(() => {
       const newGrid = Array(GRID_SIZE).fill(null).map(() => 
-        Array(GRID_SIZE).fill(null).map(() => SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)])
+        Array(GRID_SIZE).fill(null).map(() => symbols[Math.floor(Math.random() * symbols.length)])
       );
       setGrid(newGrid);
-      if (++counter > 10) { 
-        clearInterval(interval); 
-        setSpinning(false); 
-        checkWins(newGrid); 
+      
+      if (++counter > 8) {
+        clearInterval(interval);
+        setSpinning(false);
+        checkWins(newGrid);
       }
-    }, 90);
+    }, 100);
   };
 
-  const spin3D = spinAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg']
-  });
+  const checkWins = (currentGrid) => {
+    let win = 0;
+    for (let r = 0; r < GRID_SIZE; r++) {
+      const first = currentGrid[r][0];
+      if (currentGrid[r].every(s => s === first)) win += bet * 5;
+    }
+
+    if (win > 0 || Math.random() > 0.6) {
+      const finalPrize = win > 0 ? win : bet * 2;
+      sendSoundCommand('win');
+      setCoins(prev => prev + finalPrize);
+      Alert.alert('Vitória! 🎉', `Você ganhou +${finalPrize} moedas virtuais!`);
+    }
+  };
+
+  const buyOrSelectSkin = async (key) => {
+    const skin = SKINS[key];
+    if (ownedSkins.includes(key)) {
+      setActiveSkin(key);
+    } else if (coins >= skin.price) {
+      const newCoins = coins - skin.price;
+      const newOwned = [...ownedSkins, key];
+      setCoins(newCoins);
+      setOwnedSkins(newOwned);
+      setActiveSkin(key);
+      await AsyncStorage.setItem('@owned_skins', JSON.stringify(newOwned));
+    } else {
+      Alert.alert('Moedas Insuficientes', `Custa ${skin.price} moedas.`);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>🐶 Help Pets Slots 🎰</Text>
-        <Text style={styles.subtitle}>Grade 5x5 com Som e Animação 3D</Text>
+      
+      {/* WebView invisível carregada no fundo exclusivamente para processar áudio HTML5 */}
+      <View style={{ width: 0, height: 0, opacity: 0 }}>
+        <WebView
+          ref={webViewRef}
+          originWhitelist={['*']}
+          source={{ html: audioEngineHTML }}
+          javaScriptEnabled={true}
+        />
+      </View>
 
-        <View style={styles.scoreRow}>
-          <View style={styles.scoreContainer}>
-            <Text style={styles.scoreText}>🪙 Saldo: {coins}</Text>
+      <View style={styles.header}>
+        <View style={styles.coinBadge}>
+          <Text style={styles.coinText}>🪙 {coins}</Text>
+        </View>
+        <TouchableOpacity style={styles.topBtn} onPress={() => setShopModal(true)}>
+          <Text style={styles.topBtnText}>🎨 Loja</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.topBtn} onPress={() => setLeaderboardModal(true)}>
+          <Text style={styles.topBtnText}>🏆 Rank</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.title}>🐶 Help Pets Slots 🎰</Text>
+      <Text style={styles.subtitle}>Tema: {SKINS[activeSkin].name}</Text>
+
+      <View style={styles.gridContainer}>
+        {grid.map((row, r) => (
+          <View key={r} style={styles.row}>
+            {row.map((s, c) => (
+              <Animated.View 
+                key={c} 
+                style={[
+                  styles.cell, 
+                  spinning && { transform: [{ rotateX: spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }] }
+                ]}
+              >
+                <Text style={styles.cellText}>{s}</Text>
+              </Animated.View>
+            ))}
           </View>
+        ))}
+      </View>
+
+      <View style={styles.betRow}>
+        <Text style={styles.betLabel}>Aposta:</Text>
+        {[10, 20, 50].map(v => (
           <TouchableOpacity 
-            style={styles.historyButton} 
-            onPress={() => setHistoryModalVisible(true)}
+            key={v} 
+            style={[styles.betBtn, bet === v && styles.betBtnActive]} 
+            onPress={() => setBet(v)}
+            disabled={spinning}
           >
-            <Text style={styles.historyButtonText}>📜 Ganhos</Text>
+            <Text style={styles.betBtnText}>{v}</Text>
           </TouchableOpacity>
-        </View>
+        ))}
+      </View>
 
-        {/* Grade 5x5 com Animação 3D */}
-        <View style={styles.gridContainer}>
-          {grid.map((row, r) => (
-            <View key={r} style={styles.row}>
-              {row.map((s, c) => (
-                <Animated.View 
-                  key={c} 
-                  style={[
-                    styles.cell, 
-                    spinning && { transform: [{ rotateX: spin3D }] }
-                  ]}
-                >
-                  <Text style={styles.cellText}>{s}</Text>
-                </Animated.View>
-              ))}
-            </View>
-          ))}
-        </View>
+      <TouchableOpacity style={styles.spinButton} onPress={spin} disabled={spinning}>
+        <Text style={styles.spinBtnText}>{spinning ? 'Girando...' : `🎰 GIRAR (${bet} Moedas)`}</Text>
+      </TouchableOpacity>
 
-        {/* Apostas */}
-        <View style={styles.betContainer}>
-          <Text style={styles.betLabel}>Aposta:</Text>
-          {[10, 20, 50].map(val => (
-            <TouchableOpacity 
-              key={val} 
-              style={[styles.betButton, bet === val && styles.betButtonActive]} 
-              onPress={() => setBet(val)}
-              disabled={spinning}
-            >
-              <Text style={styles.betButtonText}>{val}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <TouchableOpacity 
-          style={[styles.spinButton, spinning && styles.buttonDisabled]} 
-          onPress={spin} 
-          disabled={spinning}
-        >
-          <Text style={styles.spinButtonText}>
-            {spinning ? 'Girando 3D...' : `🎰 GIRAR (${bet} Moedas)`}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.paypalButton} onPress={() => setModalVisible(true)}>
-          <Text style={styles.paypalButtonText}>💙 Apoiar com PayPal (R$ 1,00)</Text>
-        </TouchableOpacity>
-      </ScrollView>
-
-      {/* Modal PayPal */}
-      <Modal animationType="slide" transparent={true} visible={modalVisible}>
+      {/* Modal Loja */}
+      <Modal visible={shopModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Apoie os Pets 🐾</Text>
-            <Text style={styles.modalDescription}>Doe R$ 1,00 via PayPal para ajudar a causa e ganhe 150 moedas.</Text>
-            <TouchableOpacity style={styles.confirmButton} onPress={() => Linking.openURL(PAYPAL_URL)}>
-              <Text style={styles.confirmButtonText}>Ir para PayPal</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
-              <Text style={styles.closeButtonText}>Voltar</Text>
+            <Text style={styles.modalTitle}>🎨 Loja de Skins Virtuais</Text>
+            <ScrollView style={{ width: '100%', marginVertical: 10 }}>
+              {Object.keys(SKINS).map(key => {
+                const item = SKINS[key];
+                const isOwned = ownedSkins.includes(key);
+                const isActive = activeSkin === key;
+                return (
+                  <View key={key} style={styles.shopCard}>
+                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.name}</Text>
+                    <TouchableOpacity 
+                      style={[styles.buyBtn, isActive && { backgroundColor: '#64748b' }]} 
+                      onPress={() => buyOrSelectSkin(key)}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: 'bold' }}>
+                        {isActive ? 'Em Uso' : isOwned ? 'Usar' : `${item.price} 🪙`}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity onPress={() => setShopModal(false)}>
+              <Text style={{ color: '#94a3b8', padding: 10 }}>Fechar</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Modal Histórico */}
-      <Modal animationType="slide" transparent={true} visible={historyModalVisible}>
+      {/* Modal Rank */}
+      <Modal visible={leaderboardModal} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>📜 Registro de Ganhos</Text>
-            <ScrollView style={{ width: '100%', marginBottom: 16 }}>
-              {winLogs.length === 0 ? (
-                <Text style={{ color: '#94a3b8', textAlign: 'center', marginVertical: 20 }}>Nenhum ganho ainda.</Text>
-              ) : (
-                winLogs.map(item => (
-                  <View key={item.id} style={styles.logItem}>
-                    <Text style={{ color: '#fff', fontWeight: 'bold' }}>{item.type}</Text>
-                    <Text style={{ color: '#10b981', fontWeight: 'bold' }}>+{item.prize} 🪙</Text>
-                  </View>
-                ))
-              )}
-            </ScrollView>
-            <TouchableOpacity style={styles.closeButton} onPress={() => setHistoryModalVisible(false)}>
-              <Text style={styles.closeButtonText}>Fechar</Text>
+            <Text style={styles.modalTitle}>🏆 Recorde Local</Text>
+            <Text style={{ color: '#facc15', fontSize: 22, fontWeight: 'bold', marginVertical: 20 }}>
+              {highScore} Moedas
+            </Text>
+            <TouchableOpacity onPress={() => setLeaderboardModal(false)}>
+              <Text style={{ color: '#94a3b8', padding: 10 }}>Fechar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -247,36 +294,28 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a' },
-  content: { alignItems: 'center', padding: 16, paddingBottom: 40 },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginTop: 10 },
-  subtitle: { fontSize: 13, color: '#38bdf8', marginBottom: 16 },
-  scoreRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  scoreContainer: { backgroundColor: '#1e293b', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, borderWidth: 1, borderColor: '#334155', marginRight: 10 },
-  scoreText: { color: '#facc15', fontSize: 16, fontWeight: 'bold' },
-  historyButton: { backgroundColor: '#334155', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20 },
-  historyButtonText: { color: '#38bdf8', fontWeight: 'bold' },
-  gridContainer: { backgroundColor: '#0284c7', padding: 6, borderRadius: 16, marginBottom: 20 },
+  container: { flex: 1, backgroundColor: '#0f172a', alignItems: 'center', padding: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 10, marginBottom: 15 },
+  coinBadge: { backgroundColor: '#1e293b', padding: 8, borderRadius: 20, borderWidth: 1, borderColor: '#facc15' },
+  coinText: { color: '#facc15', fontWeight: 'bold' },
+  topBtn: { backgroundColor: '#334155', padding: 8, borderRadius: 16 },
+  topBtnText: { color: '#fff', fontWeight: 'bold' },
+  title: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
+  subtitle: { fontSize: 13, color: '#38bdf8', marginBottom: 15 },
+  gridContainer: { backgroundColor: '#0284c7', padding: 8, borderRadius: 16, marginBottom: 20 },
   row: { flexDirection: 'row' },
-  cell: { width: 58, height: 58, backgroundColor: '#1e293b', margin: 3, borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#0284c7' },
-  cellText: { fontSize: 28 },
-  betContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  betLabel: { color: '#f8fafc', fontWeight: 'bold', marginRight: 10 },
-  betButton: { backgroundColor: '#334155', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, marginHorizontal: 4 },
-  betButtonActive: { backgroundColor: '#0284c7' },
-  betButtonText: { color: '#fff', fontWeight: 'bold' },
-  spinButton: { backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 12, width: '100%', alignItems: 'center', marginBottom: 12 },
-  spinButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 18 },
-  buttonDisabled: { backgroundColor: '#64748b' },
-  paypalButton: { backgroundColor: '#0070ba', paddingVertical: 14, borderRadius: 12, width: '100%', alignItems: 'center' },
-  paypalButtonText: { color: '#fff', fontWeight: 'bold' },
+  cell: { width: 55, height: 55, backgroundColor: '#1e293b', margin: 2, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  cellText: { fontSize: 26 },
+  betRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  betLabel: { color: '#fff', fontWeight: 'bold', marginRight: 10 },
+  betBtn: { backgroundColor: '#334155', padding: 8, paddingHorizontal: 16, borderRadius: 8, marginHorizontal: 4 },
+  betBtnActive: { backgroundColor: '#0284c7' },
+  betBtnText: { color: '#fff', fontWeight: 'bold' },
+  spinButton: { backgroundColor: '#10b981', padding: 16, borderRadius: 12, width: '100%', alignItems: 'center' },
+  spinBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 18 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  modalContent: { backgroundColor: '#1e293b', padding: 24, borderRadius: 20, width: '100%', alignItems: 'center', maxHeight: '80%' },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 12 },
-  modalDescription: { color: '#cbd5e1', textAlign: 'center', marginBottom: 20 },
-  logItem: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#0f172a', padding: 12, borderRadius: 10, marginBottom: 8 },
-  confirmButton: { backgroundColor: '#0070ba', padding: 14, borderRadius: 10, width: '100%', alignItems: 'center', marginBottom: 10 },
-  confirmButtonText: { color: '#fff', fontWeight: 'bold' },
-  closeButton: { padding: 10 },
-  closeButtonText: { color: '#94a3b8' }
+  modalContent: { backgroundColor: '#1e293b', padding: 20, borderRadius: 20, width: '100%', alignItems: 'center' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
+  shopCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#0f172a', padding: 12, borderRadius: 10, marginBottom: 8 },
+  buyBtn: { backgroundColor: '#10b981', padding: 8, borderRadius: 6 }
 });
