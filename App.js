@@ -38,38 +38,28 @@ export default function App() {
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [winLogs, setWinLogs] = useState([]);
 
-  // Animação 3D (Rotação e Escala)
+  // Animação 3D do Giro
   const spinAnim = useRef(new Animated.Value(0)).current;
 
-  // Sons
-  const [sound, setSound] = useState();
-
+  // Função segura de áudio (se falhar, NÃO fecha o app)
   async function playSound(type) {
     try {
       let soundUri = '';
-      if (type === 'spin') {
-        soundUri = 'https://actions.google.com/sounds/v1/foley/wheels_spinning.ogg';
-      } else if (type === 'win') {
-        soundUri = 'https://actions.google.com/sounds/v1/cartoon/bell_ding.ogg';
-      } else if (type === 'jackpot') {
-        soundUri = 'https://actions.google.com/sounds/v1/human_voices/cheering_and_applause.ogg';
-      }
+      if (type === 'spin') soundUri = 'https://actions.google.com/sounds/v1/foley/wheels_spinning.ogg';
+      else if (type === 'win') soundUri = 'https://actions.google.com/sounds/v1/cartoon/bell_ding.ogg';
+      else if (type === 'jackpot') soundUri = 'https://actions.google.com/sounds/v1/human_voices/cheering_and_applause.ogg';
 
       if (soundUri) {
-        const { sound: newSound } = await Audio.Sound.createAsync(
+        const { sound } = await Audio.Sound.createAsync(
           { uri: soundUri },
-          { shouldPlay: true, volume: 0.8 }
+          { shouldPlay: true, volume: 0.5 }
         );
-        setSound(newSound);
+        setTimeout(() => { sound.unloadAsync(); }, 2000);
       }
-    } catch (error) {
-      console.log('Erro ao tocar som:', error);
+    } catch (e) {
+      // Ignora erro de som para garantir que o app continue rodando perfeitamente
     }
   }
-
-  useEffect(() => {
-    return sound ? () => { sound.unloadAsync(); } : undefined;
-  }, [sound]);
 
   useEffect(() => {
     loadSavedData();
@@ -85,17 +75,13 @@ export default function App() {
       const savedLogs = await AsyncStorage.getItem(STORAGE_LOGS_KEY);
       if (savedCoins !== null) setCoins(JSON.parse(savedCoins));
       if (savedLogs !== null) setWinLogs(JSON.parse(savedLogs));
-    } catch (e) {
-      console.error('Erro ao carregar dados:', e);
-    }
+    } catch (e) {}
   };
 
   const saveCoins = async (value) => {
     try {
       await AsyncStorage.setItem(STORAGE_COINS_KEY, JSON.stringify(value));
-    } catch (e) {
-      console.error('Erro ao salvar moedas:', e);
-    }
+    } catch (e) {}
   };
 
   const addWinLog = async (type, prize, lines) => {
@@ -114,9 +100,7 @@ export default function App() {
     setWinLogs(updatedLogs);
     try {
       await AsyncStorage.setItem(STORAGE_LOGS_KEY, JSON.stringify(updatedLogs));
-    } catch (e) {
-      console.error('Erro ao salvar histórico:', e);
-    }
+    } catch (e) {}
   };
 
   const checkWins = (currentGrid) => {
@@ -142,7 +126,7 @@ export default function App() {
       return { linePrize, isJackpot };
     };
 
-    // Horizontais
+    // 1. Horizontais
     for (let r = 0; r < GRID_SIZE; r++) {
       const res = evaluateLine(currentGrid[r]);
       if (res.linePrize > 0) linesWon++;
@@ -150,7 +134,7 @@ export default function App() {
       totalWin += res.linePrize;
     }
 
-    // Verticais
+    // 2. Verticais
     for (let c = 0; c < GRID_SIZE; c++) {
       const col = [currentGrid[0][c], currentGrid[1][c], currentGrid[2][c], currentGrid[3][c], currentGrid[4][c]];
       const res = evaluateLine(col);
@@ -159,7 +143,7 @@ export default function App() {
       totalWin += res.linePrize;
     }
 
-    // Diagonais
+    // 3. Diagonais
     const diag1 = [currentGrid[0][0], currentGrid[1][1], currentGrid[2][2], currentGrid[3][3], currentGrid[4][4]];
     const resD1 = evaluateLine(diag1);
     if (resD1.linePrize > 0) linesWon++;
@@ -189,7 +173,7 @@ export default function App() {
     if (coins < bet) {
       Alert.alert(
         'Saldo Insuficiente 🐾', 
-        'Suas moedas acabaram! Apoie o projeto via PayPal para recarregar.',
+        'Suas moedas acabaram! Apoie o projeto para recarregar.',
         [
           { text: 'Cancelar', style: 'cancel' },
           { text: 'Apoiar R$ 1,00', onPress: () => setModalVisible(true) }
@@ -202,16 +186,13 @@ export default function App() {
     setCoins(prev => prev - bet);
     playSound('spin');
 
-    // Inicia Animação de Giro 3D
+    // Executa Animação 3D do Giro
     spinAnim.setValue(0);
-    Animated.loop(
-      Animated.timing(spinAnim, {
-        toValue: 1,
-        duration: 250,
-        useNativeDriver: true,
-      }),
-      { iterations: 6 }
-    ).start();
+    Animated.timing(spinAnim, {
+      toValue: 1,
+      duration: 1000,
+      useNativeDriver: true,
+    }).start();
 
     let counter = 0;
     const interval = setInterval(() => {
@@ -222,7 +203,7 @@ export default function App() {
       setGrid(newGrid);
       counter++;
 
-      if (counter > 12) {
+      if (counter > 10) {
         clearInterval(interval);
         setSpinning(false);
         checkWins(newGrid);
@@ -238,15 +219,13 @@ export default function App() {
       addWinLog('Apoio Recebido ❤️', 150, 0);
       setModalVisible(false);
       Alert.alert('Muito Obrigado! ❤️', '150 moedas adicionadas!');
-    } else {
-      Alert.alert('Erro', 'Não foi possível abrir o PayPal.');
     }
   };
 
   // Interpolação de Rotação 3D
   const spin3D = spinAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
+    inputRange: [0, 0.5, 1],
+    outputRange: ['0deg', '180deg', '360deg'],
   });
 
   return (
@@ -254,7 +233,7 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>🐶 Help Pets Slots 🎰</Text>
-        <Text style={styles.subtitle}>Grade 5x5 com Sons e Animação 3D!</Text>
+        <Text style={styles.subtitle}>Grade 5x5: 12 Linhas de Vitória!</Text>
 
         <View style={styles.scoreRow}>
           <View style={styles.scoreContainer}>
@@ -268,7 +247,7 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Grade 5x5 com efeito 3D */}
+        {/* Grade 5x5 com Animação 3D */}
         <View style={styles.gridContainer}>
           {grid.map((row, rowIndex) => (
             <View key={rowIndex} style={styles.row}>
@@ -278,10 +257,7 @@ export default function App() {
                   style={[
                     styles.cell, 
                     spinning && {
-                      transform: [
-                        { rotateX: spin3D },
-                        { perspective: 1000 }
-                      ]
+                      transform: [{ rotateX: spin3D }]
                     }
                   ]}
                 >
@@ -292,7 +268,7 @@ export default function App() {
           ))}
         </View>
 
-        {/* Apostas */}
+        {/* Opções de Aposta */}
         <View style={styles.betContainer}>
           <Text style={styles.betLabel}>Aposta:</Text>
           {[10, 20, 50].map(val => (
@@ -314,7 +290,7 @@ export default function App() {
           disabled={spinning}
         >
           <Text style={styles.spinButtonText}>
-            {spinning ? 'Girando 3D...' : `🎰 GIRAR (${bet} Moedas)`}
+            {spinning ? 'Girando...' : `🎰 GIRAR (${bet} Moedas)`}
           </Text>
         </TouchableOpacity>
 
@@ -329,7 +305,7 @@ export default function App() {
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Apoie os Pets 🐾</Text>
             <Text style={styles.modalDescription}>
-              Doe R$ 1,00 via PayPal para ajudar na causa dos animais e receba 150 moedas para jogar na grade 5x5.
+              Doe R$ 1,00 via PayPal para ajudar os animais e ganhe 150 moedas.
             </Text>
             <TouchableOpacity style={styles.confirmButton} onPress={openPayPal}>
               <Text style={styles.confirmButtonText}>Ir para PayPal</Text>
@@ -348,7 +324,7 @@ export default function App() {
             <Text style={styles.modalTitle}>📜 Registro de Ganhos</Text>
             <ScrollView style={styles.logList}>
               {winLogs.length === 0 ? (
-                <Text style={styles.noLogsText}>Nenhum ganho registrado ainda. Faça um giro!</Text>
+                <Text style={styles.noLogsText}>Nenhum ganho registrado ainda.</Text>
               ) : (
                 winLogs.map(item => (
                   <View key={item.id} style={styles.logItem}>
@@ -383,29 +359,9 @@ const styles = StyleSheet.create({
   historyButton: { backgroundColor: '#334155', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 20 },
   historyButtonText: { color: '#38bdf8', fontWeight: 'bold', fontSize: 14 },
 
-  gridContainer: { 
-    backgroundColor: '#0284c7', 
-    padding: 6, 
-    borderRadius: 16, 
-    marginBottom: 20,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8
-  },
+  gridContainer: { backgroundColor: '#0284c7', padding: 6, borderRadius: 16, marginBottom: 20 },
   row: { flexDirection: 'row' },
-  cell: { 
-    width: 58, 
-    height: 58, 
-    backgroundColor: '#1e293b', 
-    margin: 3, 
-    borderRadius: 10, 
-    justifyContent: 'center', 
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#0284c7'
-  },
+  cell: { width: 58, height: 58, backgroundColor: '#1e293b', margin: 3, borderRadius: 10, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#0284c7' },
   cellText: { fontSize: 28 },
 
   betContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
